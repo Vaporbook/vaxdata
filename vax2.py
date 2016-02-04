@@ -4,6 +4,7 @@ import sys
 import argparse
 import sqlite3
 import elasticsearch
+import datetime
 from dateutil.parser import parse as parsedate
 
 # CLI args
@@ -39,11 +40,15 @@ datasets = {}
 es_prefix = 'vaers-'
 es = elasticsearch.Elasticsearch()
 
-# main function to open a zipped data file
-# zipped vaers files seem to contain csv files
-# but so far have only tested this with most recent
-def openZip(fn):
 
+def openZip(fn):
+    """
+    main function to open a zipped data file
+    zipped vaers files seem to contain csv files
+    but so far have only tested this with most recent
+    """
+    
+    es.indices.delete(index=es_prefix+'docs', ignore=[400, 404])
 
     ns = 'UNKNOWN'
     z = zipfile.ZipFile(fn, 'r')
@@ -59,6 +64,35 @@ def openZip(fn):
         metadata[ns] = {}
         metadata[ns]['rows'] = 0
 
+
+        # cast to the right type
+        # we could define a VAERS schema, but
+        # for now just have some baseline sanity on values
+
+        def right_type(value):
+
+            # just handle floats and strings for now
+            # integers will convert to floats
+            # dates will convert to strings
+
+            try:
+
+                v = float(value)
+
+                # okay, can be cast as float, but:
+                # this means numeric data ids will now be
+                # floats, which could cause x-ref issues
+                # TODO investigate?
+
+                # infinity is a float that cannot be a JSON value
+                if(float("inf") == v):
+                    return value
+                else:
+                    return v
+            except ValueError:
+                return unicode(value, errors='replace')
+
+
         # added this to handle non-json safe strings but it
         # did not fix the issue with inserting into elasticsearch!
         # leaving it for now in case we want to use for some other purpose
@@ -71,7 +105,14 @@ def openZip(fn):
            
                 for row in csv.reader(csvfile):
 
-                    yield [e for e in row]
+                    try:
+
+                        yield [right_type(value) for value in row]
+                    
+                    except ValueError as err:
+
+                        print err.message
+                        print e
 
 
         for row in unicode_safe_row_generator(name):
@@ -108,13 +149,24 @@ def openZip(fn):
 
                 db_insert(conn, ns, rowdict)
 
-                # this is a fix for using elasticsearch which requires
-                # valid JSON input - to keep the JSON dump from crapping
-                # out at either end, we have to use the unicode() method
-                # this is after trying way too many other recommended fixes
-                # using codec and other stuff!
+                # do some transformation before sending to ES
+
                 for key in rowdict.keys():
-                    rowdict[key] = unicode(rowdict[key], errors='replace')
+
+                    # follow ES dynamic mapping convention for dates
+
+                    if 'DATE' in key:
+                        try:
+                            rowdict[key] = parsedate(rowdict[key]).strftime('%Y-%m-%d')
+                        except ValueError as err:
+                            rowdict[key] = None
+
+                    elif key == 'VAERS_ID':
+                        # convert known ID values back to strings
+                        rowdict[key] = str(int(rowdict[key]))
+
+                print "Doc to add to ES:"
+                print rowdict
 
                 # add the doc to elasticsearch
                 es.index(index=es_prefix+'docs', doc_type=ns.lower(), body=rowdict)
