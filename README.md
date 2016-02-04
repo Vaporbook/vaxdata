@@ -24,6 +24,8 @@ Note on the scripts: vax.py is an early version playing with pandas and pycurses
 
 Running vax2.py will look for the VAERS zipfile you specify, open it, and parse each CSV found within, building three things as it goes: 1. an internal model of the data, 2. a sqlite relational db, and 3. an elasticsearch document store.
 
+I recommend using Kibana+Sense for exploring the data. Alternatively, this allows you to run SQL queries via SQLite.
+
 To try it out for yourself ...
 
 Obtain VAX data zips at:
